@@ -1,0 +1,394 @@
+---
+title: "Project"
+author: "Adam Del Rio and Nicholas Elich"
+date: "2025-06-06"
+output: pdf_document
+---
+
+### Packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(baseballr)
+library(brms)
+library(sn)
+library(bayesplot)
+library(tidybayes)
+```
+
+### Scraping Data
+
+```{r}
+start_date <- as.Date("2025-03-27")
+end_date <- as.Date("2025-05-29")
+
+# Initialize an empty list to store data frames
+all_data <- list()
+
+# Loop over the date range in 5-day increments
+current_start <- start_date
+
+while (current_start <= end_date) {
+  current_end <- current_start + 4  # 5 days window
+  
+  # Make sure current_end doesn't exceed end_date
+  if (current_end > end_date) {
+    current_end <- end_date
+  }
+  
+  # Fetch data for current 5-day window
+  cat("Fetching data from", current_start, "to", current_end, "\n")
+  temp_data <- statcast_search(start_date = as.character(current_start),
+                               end_date = as.character(current_end),
+                               player_type = "batter")
+  
+  # Append to list
+  all_data <- append(all_data, list(temp_data))
+  
+  # Move to the next window
+  current_start <- current_end + 1
+}
+
+# Combine all data frames into one
+final_data <- bind_rows(all_data)
+```
+
+### NL East Player Names
+
+```{r}
+player_names <- c(
+  "Murphy, Sean",
+  "Olson, Matt",
+  "Albies, Ozzie",
+  "Allen, Nick",
+  "Riley, Austin",
+  "Verdugo, Alex",
+  "Harris II, Michael",
+  "White, Eli",
+  "Ozuna, Marcell",
+  "Baldwin, Drake",
+  "Kelenic, Jarred",
+  "De La Cruz, Bryan",
+  "Fairchild, Stuart",
+  "Arcia, Orlando",
+  "Acuña Jr., Ronald",
+  "Profar, Jurickson",
+  "Tromp, Chadwick",
+  "Williams, Luke",
+  "Rosario, Eddie",
+  "Torrens, Luis",
+  "Alonso, Pete",
+  "Acuña, Luisangel",
+  "Lindor, Francisco",
+  "Vientos, Mark",
+  "Nimmo, Brandon",
+  "Taylor, Tyrone",
+  "Soto, Juan",
+  "Marte, Starling",
+  "Baty, Brett",
+  "McNeil, Jeff",
+  "Alvarez, Francisco",
+  "Winker, Jesse",
+  "Senger, Hayden",
+  "Siri, Jose",
+  "Azócar, José",
+  "Young, Jared",
+  "Ruiz, Keibert",
+  "Lowe, Nathaniel",
+  "García Jr., Luis",
+  "Abrams, CJ",
+  "Tena, José",
+  "Wood, James",
+  "Young, Jacob",
+  "Crews, Dylan",
+  "Bell, Josh",
+  "Call, Alex",
+  "Rosario, Amed",
+  "DeJong, Paul",
+  "Nuñez, Nasim",
+  "Adams, Riley",
+  "Hassell III, Robert",
+  "Lile, Daylen",
+  "Lipscomb, Trey",
+  "Hicks, Liam",
+  "Wagaman, Eric",
+  "López, Otto",
+  "Edwards, Xavier",
+  "Norby, Connor",
+  "Stowers, Kyle",
+  "Myers, Dane",
+  "Sánchez, Jesús",
+  "Ramírez, Agustín",
+  "Mervis, Matt",
+  "Sanoja, Javier",
+  "Pauley, Graham",
+  "Hill, Derek",
+  "Conine, Griffin",
+  "Fortes, Nick",
+  "Simón, Ronny",
+  "Bride, Jonah",
+  "Mesa, Víctor",
+  "Brantly, Rob",
+  "Realmuto, J.T.",
+  "Harper, Bryce",
+  "Stott, Bryson",
+  "Turner, Trea",
+  "Bohm, Alec",
+  "Kepler, Max",
+  "Rojas, Johan",
+  "Castellanos, Nick",
+  "Schwarber, Kyle",
+  "Marsh, Brandon",
+  "Sosa, Edmundo",
+  "Marchán, Rafael",
+  "Wilson, Weston",
+  "Stevenson, Cal",
+  "Clemens, Kody"
+)
+
+
+data2 <- final_data %>%
+  filter(description == "hit_into_play" &
+         (home_team %in% c("PHI", "ATL", "WSH", "NYM", "MIA") |
+          away_team %in% c("PHI", "ATL", "WSH", "NYM", "MIA")) &
+          player_name %in% player_names)
+```
+
+```{r}
+hits <- data2 %>% group_by(player_name) %>%
+  summarize(n = n()) %>%
+  filter(n >= 40)
+
+data3 <- data2 %>%
+  inner_join(hits, by = "player_name")
+```
+
+### Reading in CSV file after initial scrape
+
+```{r}
+data3 <- read_csv("/Users/nicholas.elich/Downloads/NLEast2025Pitches.csv")
+```
+
+### Setting Priors and Tuning with Prior Predictive Distribution
+
+```{r}
+data4 <- data3 %>%
+  mutate(across(c(release_speed, bat_speed, swing_length, launch_angle), scale))
+
+x = 0.01
+n_rep = 100000
+
+beta0 = rnorm(n_rep, 90, 2.5)
+sigma = rnorm(n_rep, 8, 3)
+alpha = rnorm(n_rep, 0, 1.5)
+beta_rel_speed = rnorm(n_rep, 1, 0)
+beta_launch = rnorm(n_rep, 0, 0.6)
+beta_swing_length = rnorm(n_rep, 6, 3)
+beta_bat_speed = rnorm(n_rep, 3, 4)
+
+y = rsn(n_rep, beta0 + beta_rel_speed*x + beta_launch*x + beta_swing_length*x + beta_bat_speed*x, sigma, alpha)
+
+hist(y, xlab="Predicted Exit Velocity (mph)", main="Prior Predictive Tuning for Exit Velocity Based on Avg. Predictor Values")
+summary(y)
+```
+
+### Checking Linear Regression Assumptions
+
+```{r}
+plot(lm(launch_speed ~ release_speed + bat_speed + swing_length + launch_angle,
+  data = data4))
+```
+
+### Model with Our Own Priors
+
+```{r}
+model1 <- brm(
+  launch_speed ~ release_speed + bat_speed + swing_length + launch_angle,
+  data = data4,
+  prior = c(prior(normal(90, 2.5), class = Intercept),
+            prior(normal(8, 3), class = sigma),
+            prior(normal(0, 1.5), class = alpha),
+            prior(normal(1, 0.5), class="b", coef = "release_speed"),
+            prior(normal(0, 0.6), class="b", coef="bat_speed"),
+            prior(normal(6, 3), class="b", coef="swing_length"),
+            prior(normal(3, 4), class="b", coef="launch_angle")),
+  family = skew_normal(),
+  chains = 4,
+  iter = 3500,
+  warmup = 1000, 
+  seed = 1234
+)
+
+summary(model1)
+get_prior(model1)
+plot(model1)
+```
+
+```{r}
+posterior_summary(model1, probs = c(0.10, 0.90))
+```
+
+### Model with brms Priors
+
+```{r}
+model2 <- brm(
+  launch_speed ~ release_speed + bat_speed + swing_length + launch_angle,
+  data = data4,
+  family = skew_normal(),
+  chains = 4,
+  iter = 3500,
+  warmup = 1000, 
+  seed = 1234
+)
+
+summary(model2)
+get_prior(model2)
+plot(model2)
+```
+
+```{r}
+posterior_summary(model2, probs = c(0.10, 0.90))
+```
+
+### Model with brms Priors and Hierarchical Component (Player Name)
+
+```{r}
+model3 <- brm(
+  launch_speed ~ release_speed + bat_speed + swing_length + launch_angle + (1 | player_name),
+  data = data4,
+  family = skew_normal(),
+  chains = 4,
+  iter = 3500,
+  warmup = 1000, 
+  seed = 1234
+)
+
+summary(model3)
+get_prior(model3)
+plot(model3)
+```
+
+```{r}
+posterior_summary(model3, probs = c(0.10, 0.90))
+```
+
+### Plotting the Random Effects of Players (Top 10 and Bottom 10)
+
+```{r}
+random_effects <- ranef(model3)$player_name[, , "Intercept"]
+
+player_effects <- as.data.frame(random_effects) |> 
+  rownames_to_column("player_name") |> 
+  rename(
+    estimate = Estimate,
+    lower = Q2.5,
+    upper = Q97.5
+  ) |> 
+  arrange(desc(estimate)) |> 
+  slice_head(n=10)
+
+ggplot(player_effects, aes(x = reorder(player_name, estimate), y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+  coord_flip() +
+  labs(
+    x = "Player",
+    y = "Estimated Random Intercept",
+    title = "Player-Specific Effects from brms"
+  ) +
+  theme_minimal()
+
+player_effects <- as.data.frame(random_effects) |> 
+  rownames_to_column("player_name") |> 
+  rename(
+    estimate = Estimate,
+    lower = Q2.5,
+    upper = Q97.5
+  ) |> 
+  arrange(desc(estimate)) |> 
+  slice_tail(n=10)
+
+ggplot(player_effects, aes(x = reorder(player_name, estimate), y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+  coord_flip() +
+  labs(
+    x = "Player",
+    y = "Estimated Random Intercept",
+    title = "Player-Specific Effects from brms"
+  ) +
+  theme_minimal()
+```
+
+### Posterior Predictive Checking for Model 1
+
+```{r}
+posterior_1 = model1 |> 
+  spread_draws(b_Intercept, b_bat_speed, b_launch_angle, b_release_speed, b_swing_length, alpha, sigma) |> 
+  mutate(mu_01 = b_Intercept + 0.01*(b_bat_speed + b_launch_angle + b_release_speed + b_swing_length))
+
+posterior_1 <- posterior_1 |> 
+  mutate(y_pred_01 = mu_01 + sigma * rnorm(nrow(posterior_1), 0, 1))
+
+posterior_1 <- data.frame(posterior_1)
+
+posterior_1 |> ggplot(aes(x=y_pred_01)) + 
+  geom_histogram(aes(y=after_stat(density)), bins = 100, col="pink", fill="white") + 
+  geom_density() + 
+  theme_bw() + 
+  ylab("Density") + 
+  xlab("Predicted Exit Velocity for Average (0.01) Predictor Values")
+
+quantile(posterior_1$y_pred_01, c(0.025, 0.1, 0.9, 0.975))
+
+pp_check(model1, ndraw=100)
+```
+
+### Posterior Predictive Checking for Model 2
+
+```{r}
+posterior_2 = model2 |> 
+  spread_draws(b_Intercept, b_bat_speed, b_launch_angle, b_release_speed, b_swing_length, alpha, sigma) |> 
+  mutate(mu_01 = b_Intercept + 0.01*(b_bat_speed + b_launch_angle + b_release_speed + b_swing_length))
+
+posterior_2 <- posterior_2 |> 
+  mutate(y_pred_01 = mu_01 + sigma * rnorm(nrow(posterior_2), 0, 1))
+
+posterior_2 <- data.frame(posterior_2)
+
+posterior_2 |> ggplot(aes(x=y_pred_01)) + 
+  geom_histogram(aes(y=after_stat(density)), bins = 100, col="pink", fill="white") + 
+  geom_density() + 
+  theme_bw() + 
+  ylab("Density") + 
+  xlab("Predicted Exit Velocity for Average (0.01) Predictor Values")
+
+quantile(posterior_2$y_pred_01, c(0.025, 0.1, 0.9, 0.975))
+
+pp_check(model2, ndraw=100)
+```
+
+### Posterior Predictive Checking for Model 3
+
+```{r}
+posterior_3 = model3 |> 
+  spread_draws(b_Intercept, b_bat_speed, b_launch_angle, b_release_speed, b_swing_length, alpha, sigma) |> 
+  mutate(mu_01 = b_Intercept + 0.01*(b_bat_speed + b_launch_angle + b_release_speed + b_swing_length))
+
+posterior_3 <- posterior_3 |> 
+  mutate(y_pred_01 = mu_01 + sigma * rnorm(nrow(posterior_3), 0, 1))
+
+posterior_3 <- data.frame(posterior_3)
+
+posterior_3 |> ggplot(aes(x=y_pred_01)) + 
+  geom_histogram(aes(y=after_stat(density)), bins = 100, col="pink", fill="white") + 
+  geom_density() + 
+  theme_bw() + 
+  ylab("Density") + 
+  xlab("Predicted Exit Velocity for Average (0.01) Predictor Values")
+
+quantile(posterior_3$y_pred_01, c(0.025, 0.1, 0.9, 0.975))
+
+pp_check(model3, ndraw=100)
+```
